@@ -76,7 +76,7 @@ class PainterI2VforKJ:
         base_frames = num_frames + (1 if two_ref_images and not fun_or_fl2v_model else 0)
         
         # 创建时间掩码
-        mask = self.create_temporal_mask(temporal_mask, base_frames, lat_h, lat_w, start_image, end_image, device, vae.dtype)
+        mask = self.create_temporal_mask(temporal_mask, base_frames, lat_h, lat_w, start_image, end_image, device, vae.dtype, fun_or_fl2v_model)
 
         # 编码图像序列
         vae.to(device)
@@ -158,7 +158,7 @@ class PainterI2VforKJ:
 
         return (image_embeds,)
     
-    def create_temporal_mask(self, temporal_mask, base_frames, lat_h, lat_w, start_image, end_image, device, dtype):
+    def create_temporal_mask(self, temporal_mask, base_frames, lat_h, lat_w, start_image, end_image, device, dtype, fun_or_fl2v_model=False):
         """创建并处理时间掩码"""
         if temporal_mask is None:
             mask = torch.zeros(1, base_frames, lat_h, lat_w, device=device, dtype=dtype)
@@ -176,12 +176,26 @@ class PainterI2VforKJ:
 
         # 重复掩码
         start_mask_repeated = torch.repeat_interleave(mask[:, 0:1], repeats=4, dim=1)
-        if end_image is not None:
-            end_mask_repeated = torch.repeat_interleave(mask[:, -1:], repeats=4, dim=1)
-            mask = torch.cat([start_mask_repeated, mask[:, 1:-1], end_mask_repeated], dim=1)
+        
+        # 修复：精确处理所有情况
+        if start_image is not None and end_image is not None:
+            if fun_or_fl2v_model:
+                # 同时有首尾帧但使用fun_or_fl2v_model模式
+                mask = torch.cat([start_mask_repeated, mask[:, 1:]], dim=1)
+            else:
+                # 同时有首尾帧且使用正常模式
+                end_mask_repeated = torch.repeat_interleave(mask[:, -1:], repeats=4, dim=1)
+                mask = torch.cat([start_mask_repeated, mask[:, 1:-1], end_mask_repeated], dim=1)
+        elif start_image is None and end_image is not None:
+            # 只有尾帧
+            mask = torch.cat([start_mask_repeated, mask[:, 1:]], dim=1)
         else:
+            # 只有首帧或其他情况
             mask = torch.cat([start_mask_repeated, mask[:, 1:]], dim=1)
 
+        # 确保可以正确reshape
+        assert mask.shape[1] % 4 == 0, f"Mask time dimension {mask.shape[1]} must be divisible by 4"
+        
         mask = mask.view(1, mask.shape[1] // 4, 4, lat_h, lat_w)
         return mask.movedim(1, 2)[0]
     
